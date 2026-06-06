@@ -7,9 +7,7 @@ use crate::{
     prediction::EditPredictionResult,
 };
 use anyhow::{Context as _, Result};
-use cloud_llm_client::{
-    AcceptEditPredictionBody, EditPredictionRejectReason, predict_edits_v3::RawCompletionRequest,
-};
+use cloud_llm_client::{AcceptEditPredictionBody, predict_edits_v3::RawCompletionRequest};
 use edit_prediction_types::PredictedCursorPosition;
 use futures::future::Shared;
 use gpui::{App, AppContext as _, Entity, Task, TaskExt, WeakEntity, prelude::*};
@@ -21,7 +19,7 @@ use release_channel::AppVersion;
 use text::{Anchor, Bias, Point};
 use ui::SharedString;
 use workspace::notifications::{ErrorMessagePrompt, NotificationId, show_app_notification};
-use zeta_prompt::{ParsedOutput, ZetaPromptInput};
+use zeta_prompt::{ParsedOutput, ZetaPromptInput, excerpt_ranges_for_format};
 
 use std::{ops::Range, path::Path, sync::Arc};
 use zeta_prompt::{
@@ -301,14 +299,20 @@ pub fn request_prediction_with_zeta(
 
             log::trace!("Got edit prediction response");
 
-            let Some(ParsedOutput {
+            let ParsedOutput {
                 new_editable_region: mut output_text,
                 range_in_excerpt: editable_range_in_excerpt,
                 cursor_offset_in_new_editable_region: cursor_offset_in_output,
-            }) = output
-            else {
-                return Ok((Some((request_id, None, model_version)), None));
-            };
+            } = output.unwrap_or_else(|| {
+                let (editable_range, _) =
+                    excerpt_ranges_for_format(zeta_format, &prompt_input.excerpt_ranges);
+                ParsedOutput {
+                    new_editable_region: prompt_input.cursor_excerpt[editable_range.clone()]
+                        .to_string(),
+                    range_in_excerpt: editable_range,
+                    cursor_offset_in_new_editable_region: None,
+                }
+            });
 
             let editable_range_in_buffer = editable_range_in_excerpt.start
                 + full_context_offset_range.start
@@ -345,14 +349,14 @@ pub fn request_prediction_with_zeta(
                 &snapshot,
             );
 
-            let prediction = Some(Prediction {
+            let prediction = Prediction {
                 prompt_input,
                 buffer,
                 snapshot: snapshot.clone(),
                 edits,
                 cursor_position,
                 editable_range_in_buffer,
-            });
+            };
 
             anyhow::Ok((Some((request_id, prediction, model_version)), usage))
         }
@@ -366,46 +370,26 @@ pub fn request_prediction_with_zeta(
         };
         let request_duration = cx.background_executor().now() - request_start;
 
-        let Some(Prediction {
+        let Prediction {
             prompt_input: inputs,
             buffer: edited_buffer,
             snapshot: edited_buffer_snapshot,
             edits,
             cursor_position,
             editable_range_in_buffer,
-            ..
-        }) = prediction
-        else {
-            return Ok(Some(EditPredictionResult {
-                id,
-                prediction: Err(EditPredictionRejectReason::Empty),
-                model_version,
-                e2e_latency: request_duration,
-            }));
-        };
+        } = prediction;
 
-        let result = EditPredictionResult::new(
-            id,
-            &edited_buffer,
-            &edited_buffer_snapshot,
-            edits.into(),
-            cursor_position,
-            Some(edited_buffer_snapshot.anchor_range_inside(editable_range_in_buffer.clone())),
-            inputs,
-            model_version,
-            request_duration,
-            cx,
-        )
-        .await;
-
-        if can_collect_data && let Ok(prediction) = &result.prediction {
+        let edits: Arc<[_]> = edits.into();
+        let edit_preview = edited_buffer
+            .read_with(cx, |buffer, cx| buffer.preview_edits(edits.clone(), cx))
+            .await;
+        {
             let weak_this = this.clone();
-            let request_id = prediction.id.clone();
+            let request_id = id.clone();
             let edited_buffer = edited_buffer.clone();
             let edited_buffer_snapshot = edited_buffer_snapshot.clone();
             let editable_range_in_buffer = editable_range_in_buffer.clone();
-            let edit_preview = prediction.edit_preview.clone();
-            let model_version = prediction.model_version.clone();
+            let model_version = model_version.clone();
             let example_task = capture_data.and_then(|uncommitted_diffs| {
                 let (recently_opened_files, recently_viewed_files) = this
                     .read_with(cx, |this, _| {
@@ -468,6 +452,20 @@ pub fn request_prediction_with_zeta(
             })
             .detach();
         }
+
+        let result = EditPredictionResult::new(
+            id,
+            &edited_buffer,
+            &edited_buffer_snapshot,
+            edits,
+            cursor_position,
+            Some(edited_buffer_snapshot.anchor_range_inside(editable_range_in_buffer)),
+            inputs,
+            model_version,
+            request_duration,
+            cx,
+        )
+        .await;
 
         Ok(Some(result))
     })
