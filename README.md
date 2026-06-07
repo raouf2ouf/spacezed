@@ -1,3 +1,21 @@
+# spacezed
+
+A Spacemacs-flavored fork of [Zed](https://github.com/zed-industries/zed),
+built as a cockpit for directing Claude (and other terminal coding agents):
+a powerline spaceline, an `SPC` leader with a which-key bottom sheet, and a
+native multi-agent status bar with cross-window jump-to-agent.
+
+This is one person's opinionated build, shared to **copy as-is**, not to
+configure. **See [SPACEZED.md](./SPACEZED.md) for the feature list and
+build-it-yourself instructions.** The default branch (`feat/spacezed`) is the
+fork; `main` tracks upstream Zed.
+
+Based on [Zed](https://github.com/zed-industries/zed) by Zed Industries, Inc.,
+used under GPL-3.0. spacezed is not affiliated with or endorsed by Zed
+Industries. The upstream project's README follows.
+
+---
+
 # Zed
 
 [![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
