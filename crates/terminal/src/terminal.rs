@@ -376,6 +376,7 @@ impl TerminalBuilder {
         let term = Arc::new(FairMutex::new(term));
 
         let terminal = Terminal {
+            spacezed_term_id: None,
             task: None,
             terminal_type: TerminalType::DisplayOnly,
             completion_tx: None,
@@ -442,6 +443,9 @@ impl TerminalBuilder {
     ) -> Task<Result<TerminalBuilder>> {
         let version = release_channel::AppVersion::global(cx);
         let background_executor = cx.background_executor().clone();
+        // Spacezed: a stable per-terminal id, exported to the child process so
+        // agent hooks (e.g. Claude Code) can report status back to this pane.
+        let spacezed_term_id = uuid::Uuid::new_v4().to_string();
         let fut = async move {
             // Remove SHLVL so the spawned shell initializes it to 1, matching
             // the behavior of standalone terminal emulators like iTerm2/Kitty/Alacritty.
@@ -457,6 +461,7 @@ impl TerminalBuilder {
             }
 
             insert_zed_terminal_env(&mut env, &version);
+            env.insert("SPACEZED_TERM_ID".to_string(), spacezed_term_id.clone());
 
             #[derive(Default)]
             struct ShellParams {
@@ -601,6 +606,7 @@ impl TerminalBuilder {
 
             let no_task = task.is_none();
             let terminal = Terminal {
+                spacezed_term_id: Some(spacezed_term_id),
                 task,
                 terminal_type: TerminalType::Pty {
                     pty_tx: Notifier(pty_tx),
@@ -839,6 +845,9 @@ enum TerminalType {
 }
 
 pub struct Terminal {
+    // Spacezed: exported as SPACEZED_TERM_ID; keys the agent-status state
+    // files written by Claude Code hooks. None for display-only terminals.
+    spacezed_term_id: Option<String>,
     terminal_type: TerminalType,
     completion_tx: Option<Sender<Option<ExitStatus>>>,
     term: Arc<FairMutex<Term<ZedListener>>>,
@@ -2277,6 +2286,10 @@ impl Terminal {
         self.vi_mode_enabled
     }
 
+    pub fn spacezed_term_id(&self) -> Option<&str> {
+        self.spacezed_term_id.as_deref()
+    }
+
     pub fn clone_builder(&self, cx: &App, cwd: Option<PathBuf>) -> Task<Result<TerminalBuilder>> {
         let working_directory = self.working_directory().or_else(|| cwd);
         TerminalBuilder::new(
@@ -2386,6 +2399,16 @@ unsafe fn append_text_to_term(term: &mut Term<ZedListener>, text_lines: &[&str])
 
 impl Drop for Terminal {
     fn drop(&mut self) {
+        // Spacezed: a killed pane never delivers the SessionEnd hook, so the
+        // agent state file would ghost in the registry without this cleanup.
+        if let Some(term_id) = self.spacezed_term_id.take()
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            let state_file = std::path::PathBuf::from(home)
+                .join(".local/state/spacezed/agents")
+                .join(format!("{term_id}.json"));
+            std::fs::remove_file(state_file).ok();
+        }
         if let TerminalType::Pty { pty_tx, info } =
             std::mem::replace(&mut self.terminal_type, TerminalType::DisplayOnly)
         {

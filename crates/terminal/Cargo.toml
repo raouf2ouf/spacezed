@@ -39,6 +39,7 @@ task.workspace = true
 theme.workspace = true
 thiserror.workspace = true
 url.workspace = true
+uuid.workspace = true
 util.workspace = true
 urlencoding.workspace = true
 parking_lot.workspace = true
