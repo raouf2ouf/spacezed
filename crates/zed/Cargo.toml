@@ -149,6 +149,7 @@ language_model.workspace = true
 language_models.workspace = true
 language_onboarding.workspace = true
 language_selector.workspace = true
+libc.workspace = true
 language_tools.workspace = true
 languages = { workspace = true, features = ["load-grammars"] }
 line_ending_selector.workspace = true

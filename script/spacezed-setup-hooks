@@ -1,0 +1,54 @@
+#!/bin/bash
+# Installs the spacezed agent-status hooks into ~/.claude/settings.json.
+#
+# Idempotent: hook entries are keyed by the spacezed-agent-hook command, so
+# re-running replaces rather than duplicates. A timestamped backup of
+# settings.json is written next to it before any change.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK_CMD="$SCRIPT_DIR/spacezed-agent-hook"
+SETTINGS="$HOME/.claude/settings.json"
+
+[ -x "$HOOK_CMD" ] || { echo "error: $HOOK_CMD not found or not executable"; exit 1; }
+command -v jq >/dev/null || { echo "error: jq is required"; exit 1; }
+
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+
+backup="$SETTINGS.backup-$(date +%Y%m%d-%H%M%S)"
+cp "$SETTINGS" "$backup"
+echo "backup: $backup"
+
+# Events the spacezed agent registry consumes. SubagentStop is intentionally
+# absent (mid-turn noise) and SessionEnd handles cleanup.
+EVENTS_NO_MATCHER="UserPromptSubmit Notification Stop SessionStart SessionEnd"
+EVENTS_MATCHER="PreToolUse PostToolUse PermissionRequest"
+
+updated=$(cat "$SETTINGS")
+
+for event in $EVENTS_NO_MATCHER; do
+    updated=$(printf '%s' "$updated" | jq \
+        --arg event "$event" --arg cmd "$HOOK_CMD" '
+        .hooks[$event] = (
+            ((.hooks[$event] // []) | map(select(
+                (.hooks // []) | all(.command != $cmd)
+            )))
+            + [{hooks: [{type: "command", command: $cmd}]}]
+        )')
+done
+
+for event in $EVENTS_MATCHER; do
+    updated=$(printf '%s' "$updated" | jq \
+        --arg event "$event" --arg cmd "$HOOK_CMD" '
+        .hooks[$event] = (
+            ((.hooks[$event] // []) | map(select(
+                (.hooks // []) | all(.command != $cmd)
+            )))
+            + [{matcher: "*", hooks: [{type: "command", command: $cmd}]}]
+        )')
+done
+
+printf '%s\n' "$updated" > "$SETTINGS"
+echo "installed spacezed hooks into $SETTINGS"
+echo "events: $EVENTS_NO_MATCHER $EVENTS_MATCHER"

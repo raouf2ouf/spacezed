@@ -1,3 +1,5 @@
+mod agent_cockpit;
+mod agent_registry;
 mod app_menus;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
@@ -423,7 +425,10 @@ pub fn initialize_workspace(
         }
 
         // Spacezed: the spaceline replaces every stock status bar item with a
-        // single component rendering the whole bar.
+        // single component rendering the whole bar. The agent registry must
+        // exist first so the spaceline can observe it.
+        agent_registry::AgentRegistry::init(app_state.fs.clone(), cx);
+        workspace.register_action(agent_cockpit::new_agent_terminal);
         let spaceline = cx.new(|cx| spaceline::Spaceline::new(workspace, window, cx));
         workspace.status_bar().update(cx, |status_bar, cx| {
             status_bar.add_left_item(spaceline, window, cx);

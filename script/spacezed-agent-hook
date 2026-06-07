@@ -1,0 +1,58 @@
+#!/bin/bash
+# Spacezed agent-status hook for Claude Code.
+#
+# Registered for every hook event by script/spacezed-setup-hooks. Reads the
+# hook payload on stdin and maintains one JSON state file per Zed terminal at
+# ~/.local/state/spacezed/agents/<SPACEZED_TERM_ID>.json, which the spacezed
+# fork watches to drive the agent registry (spaceline segment, SPC a tree).
+#
+# No-ops when SPACEZED_TERM_ID is unset, so plain terminals, tmux/ct
+# sessions, and CI runs are unaffected.
+
+set -euo pipefail
+
+[ -n "${SPACEZED_TERM_ID:-}" ] || exit 0
+
+STATE_DIR="$HOME/.local/state/spacezed/agents"
+STATE_FILE="$STATE_DIR/$SPACEZED_TERM_ID.json"
+
+payload=$(cat)
+event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty')
+[ -n "$event" ] || exit 0
+
+case "$event" in
+    SessionStart)                          status="idle" ;;
+    UserPromptSubmit|PreToolUse|PostToolUse) status="working" ;;
+    # PermissionRequest fires exactly when the permission dialog shows
+    # (herdr-proven); Notification also covers "waiting for your input".
+    PermissionRequest|Notification)        status="blocked" ;;
+    Stop)                                  status="idle" ;;
+    SessionEnd)
+        rm -f "$STATE_FILE"
+        exit 0
+        ;;
+    # SubagentStop and anything unknown: mid-turn noise, no state change.
+    *) exit 0 ;;
+esac
+
+mkdir -p "$STATE_DIR"
+tmp_file=$(mktemp "$STATE_DIR/.tmp.XXXXXX")
+# $PPID is the agent process itself (hooks run as its children); the fork's
+# registry prunes entries whose pid is no longer alive.
+printf '%s' "$payload" | jq -c \
+    --arg term_id "$SPACEZED_TERM_ID" \
+    --arg status "$status" \
+    --arg pid "$PPID" \
+    --arg ts "$(date +%s)" \
+    '{
+        term_id: $term_id,
+        status: $status,
+        pid: ($pid | tonumber),
+        event: .hook_event_name,
+        session_id: (.session_id // null),
+        cwd: (.cwd // null),
+        message: (.message // null),
+        ts: ($ts | tonumber)
+    }' > "$tmp_file"
+# Atomic rename so the fork's fs watcher never reads a half-written file.
+mv "$tmp_file" "$STATE_FILE"

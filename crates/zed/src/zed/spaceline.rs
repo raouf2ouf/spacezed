@@ -6,6 +6,7 @@
 //! the right, joined by powerline arrows. Opinionated by design: the
 //! spacemacs-dark palette is hardcoded where no theme key exists.
 
+use crate::zed::agent_registry::{AgentRegistry, AgentStatus};
 use editor::{Editor, EditorEvent};
 use gpui::{
     App, Context, Entity, Hsla, IntoElement, ParentElement, PathBuilder, Render, SharedString,
@@ -45,6 +46,12 @@ fn term_vi_background() -> Hsla {
 fn on_state_color() -> Hsla {
     rgb(0x1a1a22).into()
 }
+fn agent_working_color() -> Hsla {
+    rgb(0x67b11d).into()
+}
+fn agent_blocked_color() -> Hsla {
+    rgb(0xf2241f).into()
+}
 
 enum ActiveItem {
     // Editor data arrives via subscriptions, so no handle is stored here.
@@ -75,6 +82,10 @@ impl Spaceline {
 
         let git_store = workspace.project().read(cx).git_store().clone();
         cx.observe(&git_store, |_, _, cx| cx.notify()).detach();
+
+        if let Some(agent_registry) = AgentRegistry::global(cx) {
+            cx.observe(&agent_registry, |_, _, cx| cx.notify()).detach();
+        }
 
         Self {
             workspace: workspace.weak_handle(),
@@ -190,6 +201,47 @@ impl Spaceline {
             &name,
             MAX_SEGMENT_TEXT,
         )))
+    }
+
+    /// Aggregate agent counts across ALL windows: blocked in red, working in
+    /// green, idle dimmed. None when no agents are registered.
+    fn agent_segment(&self, cx: &App) -> Option<gpui::AnyElement> {
+        let registry = AgentRegistry::global(cx)?;
+        let registry = registry.read(cx);
+        let blocked = registry.count_with_status(AgentStatus::Blocked);
+        let working = registry.count_with_status(AgentStatus::Working);
+        let idle = registry.count_with_status(AgentStatus::Idle);
+        if blocked + working + idle == 0 {
+            return None;
+        }
+        let mut segment = h_flex()
+            .h_full()
+            .px(px(10.0))
+            .gap(px(8.0))
+            .bg(seg3_background());
+        if blocked > 0 {
+            segment = segment.child(
+                div()
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(agent_blocked_color())
+                    .child(SharedString::from(format!("◉ {blocked}"))),
+            );
+        }
+        if working > 0 {
+            segment = segment.child(
+                div()
+                    .text_color(agent_working_color())
+                    .child(SharedString::from(format!("● {working}"))),
+            );
+        }
+        if idle > 0 {
+            segment = segment.child(
+                div()
+                    .text_color(dim_text_color())
+                    .child(SharedString::from(format!("○ {idle}"))),
+            );
+        }
+        Some(segment.into_any_element())
     }
 
     fn window_number(&self, window: &Window, cx: &App) -> usize {
@@ -312,7 +364,7 @@ impl Render for Spaceline {
                     div()
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(state_foreground)
-                        .child(mode_text.clone()),
+                        .child(mode_text),
                 ),
         );
 
@@ -385,41 +437,43 @@ impl Render for Spaceline {
             }
         }
 
-        // Right chain, outer to inner: language -> line:col -> scroll percent.
+        // Right chain, inner to outer: agents -> language -> line:col ->
+        // scroll percent. `previous_background` threads the arrow colors.
         let mut right = h_flex().h_full();
+        let mut previous_background = bar_background;
+
+        if let Some(agent_segment) = self.agent_segment(cx) {
+            right = right
+                .child(arrow_left(previous_background, seg3_background()))
+                .child(agent_segment);
+            previous_background = seg3_background();
+        }
+
         match &self.active_item {
             ActiveItem::Editor => {
                 if let Some(language_name) = &self.language_name {
                     right = right
-                        .child(arrow_left(bar_background, seg3_background()))
+                        .child(arrow_left(previous_background, seg3_background()))
                         .child(segment(
                             seg3_background(),
                             segment_text_color(),
                             language_name.clone(),
                         ));
+                    previous_background = seg3_background();
                 }
                 if let Some((line, column)) = self.cursor_position {
-                    let previous = if self.language_name.is_some() {
-                        seg3_background()
-                    } else {
-                        bar_background
-                    };
                     right = right
-                        .child(arrow_left(previous, seg2_background()))
+                        .child(arrow_left(previous_background, seg2_background()))
                         .child(segment(
                             seg2_background(),
                             segment_text_color(),
                             SharedString::from(format!("{line}:{column}")),
                         ));
+                    previous_background = seg2_background();
                 }
                 if let Some(scroll_percent) = &self.scroll_percent {
-                    let previous = if self.cursor_position.is_some() {
-                        seg2_background()
-                    } else {
-                        bar_background
-                    };
                     right = right
-                        .child(arrow_left(previous, state_background))
+                        .child(arrow_left(previous_background, state_background))
                         .child(
                             h_flex()
                                 .h_full()
@@ -444,7 +498,7 @@ impl Render for Spaceline {
                         });
                     if let Some(directory_name) = directory_name {
                         right = right
-                            .child(arrow_left(bar_background, state_background))
+                            .child(arrow_left(previous_background, state_background))
                             .child(
                                 h_flex()
                                     .h_full()

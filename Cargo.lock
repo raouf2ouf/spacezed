@@ -17088,6 +17088,7 @@ dependencies = [
  "urlencoding",
  "util",
  "util_macros",
+ "uuid",
  "windows 0.61.3",
 ]
 
@@ -21631,6 +21632,7 @@ dependencies = [
  "language_selector",
  "language_tools",
  "languages",
+ "libc",
  "line_ending_selector",
  "log",
  "markdown",
