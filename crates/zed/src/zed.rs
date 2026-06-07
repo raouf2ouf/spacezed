@@ -429,6 +429,8 @@ pub fn initialize_workspace(
         // exist first so the spaceline can observe it.
         agent_registry::AgentRegistry::init(app_state.fs.clone(), cx);
         workspace.register_action(agent_cockpit::new_agent_terminal);
+        workspace.register_action(agent_cockpit::focus_next_blocked);
+        workspace.register_action(agent_cockpit::list_agents);
         let spaceline = cx.new(|cx| spaceline::Spaceline::new(workspace, window, cx));
         workspace.status_bar().update(cx, |status_bar, cx| {
             status_bar.add_left_item(spaceline, window, cx);

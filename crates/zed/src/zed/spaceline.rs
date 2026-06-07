@@ -46,11 +46,14 @@ fn term_vi_background() -> Hsla {
 fn on_state_color() -> Hsla {
     rgb(0x1a1a22).into()
 }
-fn agent_working_color() -> Hsla {
+pub(crate) fn agent_working_color() -> Hsla {
     rgb(0x67b11d).into()
 }
-fn agent_blocked_color() -> Hsla {
+pub(crate) fn agent_blocked_color() -> Hsla {
     rgb(0xf2241f).into()
+}
+pub(crate) fn agent_idle_color() -> Hsla {
+    dim_text_color()
 }
 
 enum ActiveItem {

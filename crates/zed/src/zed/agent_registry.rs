@@ -21,13 +21,13 @@ pub enum AgentStatus {
     Idle,
 }
 
-// The state files carry more (session_id, cwd, message, ts) for the Phase E2
-// agent picker; only what E1 consumes is deserialized here.
 #[derive(Clone, Debug, Deserialize)]
 pub struct AgentState {
     pub term_id: String,
     pub status: AgentStatus,
     pub pid: Option<i32>,
+    pub ts: Option<u64>,
+    pub cwd: Option<String>,
 }
 
 fn process_is_alive(pid: i32) -> bool {
@@ -156,5 +156,34 @@ impl AgentRegistry {
             .values()
             .filter(|state| state.status == status)
             .count()
+    }
+
+    /// All agents, neediest first: blocked, then idle, then working, oldest
+    /// state change first within each group.
+    pub fn agents_by_urgency(&self) -> Vec<AgentState> {
+        let mut agents: Vec<AgentState> = self.agents.values().cloned().collect();
+        agents.sort_by_key(|state| {
+            let rank = match state.status {
+                AgentStatus::Blocked => 0,
+                AgentStatus::Idle => 1,
+                AgentStatus::Working => 2,
+            };
+            (rank, state.ts.unwrap_or(u64::MAX))
+        });
+        agents
+    }
+
+    /// The agent most deserving of attention: the longest-blocked one, or
+    /// failing that the longest-idle one (finished, awaiting instructions).
+    /// Working agents are never targets. Self-cycling: responding to an
+    /// agent changes its status, so the next invocation finds the next one.
+    pub fn attention_target(&self) -> Option<&AgentState> {
+        let oldest_with = |status: AgentStatus| {
+            self.agents
+                .values()
+                .filter(|state| state.status == status)
+                .min_by_key(|state| state.ts.unwrap_or(u64::MAX))
+        };
+        oldest_with(AgentStatus::Blocked).or_else(|| oldest_with(AgentStatus::Idle))
     }
 }
