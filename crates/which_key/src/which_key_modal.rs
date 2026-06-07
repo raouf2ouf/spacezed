@@ -5,11 +5,9 @@ use gpui::{
     App, Context, DismissEvent, EventEmitter, FocusHandle, Focusable, FontWeight, Keystroke,
     ScrollHandle, Subscription, WeakEntity, Window,
 };
-use settings::Settings;
 use std::collections::HashMap;
-use theme::ThemeSettings;
 use ui::{
-    Divider, DividerColor, DynamicSpacing, LabelSize, WithScrollbar, prelude::*,
+    Divider, DividerColor, LabelSize, WithScrollbar, prelude::*,
     text_for_keystrokes,
 };
 use workspace::{ModalView, Workspace};
@@ -139,32 +137,71 @@ impl Render for WhichKeyModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_rows = !self.bindings.is_empty();
         let viewport_size = window.viewport_size();
-
-        let max_panel_width = px((f32::from(viewport_size.width) * 0.5).min(480.0));
         let max_content_height = px(f32::from(viewport_size.height) * 0.4);
 
-        // Push above status bar when visible
+        // Spacezed: the spaceline status bar has a fixed height; the sheet
+        // sits flush on top of it like the Spacemacs which-key buffer.
+        let spaceline_height = px(26.0);
         let status_height = self
             ._workspace
             .upgrade()
             .and_then(|workspace| {
                 workspace.read_with(cx, |workspace, cx| {
-                    if workspace.status_bar_visible(cx) {
-                        Some(
-                            DynamicSpacing::Base04.px(cx) * 2.0
-                                + ThemeSettings::get_global(cx).ui_font_size(cx),
-                        )
-                    } else {
-                        None
-                    }
+                    workspace.status_bar_visible(cx).then_some(spaceline_height)
                 })
             })
             .unwrap_or(px(0.));
 
-        let margin_bottom = px(16.);
-        let bottom_offset = margin_bottom + status_height;
+        // Column-major grid, top-to-bottom then wrap, like Spacemacs.
+        let horizontal_padding = px(16.0);
+        let column_width = 280.0_f32;
+        let available_width =
+            (f32::from(viewport_size.width) - f32::from(horizontal_padding) * 2.0).max(column_width);
+        let column_count = ((available_width / column_width) as usize).max(1);
+        let rows_per_column = self.bindings.len().div_ceil(column_count).max(1);
 
-        // Title section
+        let columns = self
+            .bindings
+            .chunks(rows_per_column)
+            .map(|column| {
+                v_flex()
+                    .gap(px(2.))
+                    .min_w_0()
+                    .flex_1()
+                    .children(column.iter().map(|(keystrokes, action_name)| {
+                        let is_group = action_name.starts_with('+');
+                        let label_color = if is_group {
+                            Color::Success
+                        } else {
+                            Color::Default
+                        };
+                        h_flex()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .w(px(64.))
+                                    .flex_none()
+                                    .text_align(gpui::TextAlign::Right)
+                                    .child(
+                                        Label::new(keystrokes.clone())
+                                            .size(LabelSize::Default)
+                                            .color(Color::Accent),
+                                    ),
+                            )
+                            .child(
+                                Label::new("→").size(LabelSize::Default).color(Color::Muted),
+                            )
+                            .child(
+                                Label::new(action_name.clone())
+                                    .size(LabelSize::Default)
+                                    .color(label_color)
+                                    .single_line()
+                                    .truncate(),
+                            )
+                    }))
+            })
+            .collect::<Vec<_>>();
+
         let title_section = {
             let mut column = v_flex().gap(px(0.)).child(
                 div()
@@ -191,60 +228,27 @@ impl Render for WhichKeyModal {
         let content = h_flex()
             .items_start()
             .id("which-key-content")
-            .gap(px(8.))
+            .gap(px(24.))
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .h_full()
             .max_h(max_content_height)
-            .child(
-                // Keystrokes column
-                v_flex()
-                    .gap(px(4.))
-                    .flex_shrink_0()
-                    .children(self.bindings.iter().map(|(keystrokes, _)| {
-                        div()
-                            .child(
-                                Label::new(keystrokes.clone())
-                                    .size(LabelSize::Default)
-                                    .color(Color::Accent),
-                            )
-                            .text_align(gpui::TextAlign::Right)
-                    })),
-            )
-            .child(
-                // Actions column
-                v_flex()
-                    .gap(px(4.))
-                    .flex_1()
-                    .min_w_0()
-                    .children(self.bindings.iter().map(|(_, action_name)| {
-                        let is_group = action_name.starts_with('+');
-                        let label_color = if is_group {
-                            Color::Success
-                        } else {
-                            Color::Default
-                        };
-
-                        div().child(
-                            Label::new(action_name.clone())
-                                .size(LabelSize::Default)
-                                .color(label_color)
-                                .single_line()
-                                .truncate(),
-                        )
-                    })),
-            );
+            .children(columns);
 
         div()
             .id("which-key-buffer-panel-scroll")
             .occlude()
             .absolute()
-            .bottom(bottom_offset)
-            .right(px(16.))
-            .min_w(px(220.))
-            .max_w(max_panel_width)
-            .elevation_3(cx)
-            .px(px(12.))
+            .bottom(status_height)
+            .left_0()
+            // GPUI absolute elements size to content; explicit width is what
+            // actually stretches the sheet across the window.
+            .w_full()
+            .bg(cx.theme().colors().elevated_surface_background)
+            .border_t_1()
+            .border_color(cx.theme().colors().border)
+            .px(horizontal_padding)
+            .py(px(6.))
             .child(v_flex().child(title_section).when(has_rows, |el| {
                 el.child(
                     div()
