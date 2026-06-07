@@ -1523,6 +1523,22 @@
   // 3. Don't load direnv configuration at all.
   //      "load_direnv": "disabled"
   "load_direnv": "direct",
+  // Which directories get a login-shell probe to capture the project
+  // environment. May take 4 values:
+  // 1. Probe every directory that requests one, including each git
+  //    repository discovered in the project.
+  //      "project_environment": "all"
+  // 2. Probe worktree roots and top-level repositories; repositories nested
+  //    inside another repository (e.g. submodules) reuse the environment of
+  //    their outermost containing repository.
+  //      "project_environment": "top_level"
+  // 3. Probe each worktree root once and reuse it for every directory
+  //    inside that worktree.
+  //      "project_environment": "root_only"
+  // 4. Don't probe at all; terminals, tasks, and language servers inherit
+  //    Zed's own environment.
+  //      "project_environment": "off"
+  "project_environment": "all",
   "edit_predictions": {
     // Which edit prediction provider to use.
     "provider": "zed",

@@ -14,7 +14,7 @@ use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity
 use settings::Settings as _;
 
 use crate::{
-    project_settings::{DirenvSettings, ProjectSettings},
+    project_settings::{DirenvSettings, ProjectEnvironmentSettings, ProjectSettings},
     worktree_store::WorktreeStore,
 };
 
@@ -22,6 +22,7 @@ pub struct ProjectEnvironment {
     cli_environment: Option<HashMap<String, String>>,
     local_environments: HashMap<(Shell, Arc<Path>), Shared<Task<Option<HashMap<String, String>>>>>,
     remote_environments: HashMap<(Shell, Arc<Path>), Shared<Task<Option<HashMap<String, String>>>>>,
+    probe_directory_remaps: HashMap<(ProjectEnvironmentSettings, Arc<Path>), Arc<Path>>,
     environment_error_messages: VecDeque<String>,
     environment_error_messages_tx: mpsc::UnboundedSender<String>,
     worktree_store: WeakEntity<WorktreeStore>,
@@ -58,6 +59,7 @@ impl ProjectEnvironment {
             cli_environment,
             local_environments: Default::default(),
             remote_environments: Default::default(),
+            probe_directory_remaps: Default::default(),
             environment_error_messages: Default::default(),
             environment_error_messages_tx: tx,
             worktree_store,
@@ -209,6 +211,17 @@ impl ProjectEnvironment {
             return Task::ready(Some(cli_environment)).shared();
         }
 
+        let abs_path = match ProjectSettings::get_global(cx).project_environment {
+            ProjectEnvironmentSettings::All => abs_path,
+            ProjectEnvironmentSettings::Off => {
+                return Task::ready(Some(HashMap::default())).shared();
+            }
+            mode @ (ProjectEnvironmentSettings::TopLevel
+            | ProjectEnvironmentSettings::RootOnly) => {
+                self.probe_directory(mode, abs_path, cx)
+            }
+        };
+
         self.local_environments
             .entry((shell.clone(), abs_path.clone()))
             .or_insert_with(|| {
@@ -287,6 +300,53 @@ impl ProjectEnvironment {
             .clone()
     }
 
+    /// Maps a requested directory to the directory whose environment should
+    /// be probed, per the `project_environment` setting. Coalescing nested
+    /// directories onto one path lets `local_environments` deduplicate the
+    /// expensive login-shell probes (e.g. one per nested git submodule).
+    fn probe_directory(
+        &mut self,
+        mode: ProjectEnvironmentSettings,
+        abs_path: Arc<Path>,
+        cx: &App,
+    ) -> Arc<Path> {
+        if let Some(remapped) = self.probe_directory_remaps.get(&(mode, abs_path.clone())) {
+            return remapped.clone();
+        }
+
+        let worktree_root = self
+            .worktree_store
+            .read_with(cx, |worktree_store, cx| {
+                worktree_store
+                    .find_worktree(&abs_path, cx)
+                    .and_then(|(worktree, _)| {
+                        let worktree = worktree.read(cx);
+                        if worktree.is_single_file() {
+                            worktree.abs_path().parent().map(Arc::from)
+                        } else {
+                            Some(worktree.abs_path())
+                        }
+                    })
+            })
+            .ok()
+            .flatten();
+
+        let remapped = match (mode, worktree_root) {
+            (_, None) => abs_path.clone(),
+            (ProjectEnvironmentSettings::RootOnly, Some(root)) => root,
+            (ProjectEnvironmentSettings::TopLevel, Some(root)) => {
+                outermost_repository_in(&root, &abs_path).unwrap_or_else(|| abs_path.clone())
+            }
+            (ProjectEnvironmentSettings::All | ProjectEnvironmentSettings::Off, Some(_)) => {
+                abs_path.clone()
+            }
+        };
+
+        self.probe_directory_remaps
+            .insert((mode, abs_path), remapped.clone());
+        remapped
+    }
+
     pub fn peek_environment_error(&self) -> Option<&String> {
         self.environment_error_messages.front()
     }
@@ -294,6 +354,25 @@ impl ProjectEnvironment {
     pub fn pop_environment_error(&mut self) -> Option<String> {
         self.environment_error_messages.pop_front()
     }
+}
+
+/// Returns the outermost directory at or below `root` on the path to
+/// `abs_path` that contains a `.git` entry (a repository or submodule
+/// boundary; `.git` is a file for submodules, so check existence, not
+/// directory-ness).
+fn outermost_repository_in(root: &Path, abs_path: &Path) -> Option<Arc<Path>> {
+    let relative = abs_path.strip_prefix(root).ok()?;
+    let mut current = root.to_path_buf();
+    if current.join(".git").exists() {
+        return Some(Arc::from(current.as_path()));
+    }
+    for component in relative.components() {
+        current.push(component);
+        if current.join(".git").exists() {
+            return Some(Arc::from(current.as_path()));
+        }
+    }
+    None
 }
 
 fn set_origin_marker(env: &mut HashMap<String, String>, origin: EnvironmentOrigin) {
@@ -391,6 +470,52 @@ async fn load_directory_shell_environment(
     }
 
     Ok(envs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_outermost_repository_in() {
+        let temp = tempfile::tempdir().expect("creating temp dir");
+        let root = temp.path();
+        let nested = root.join("vendored").join("lib").join("submodule");
+        std::fs::create_dir_all(nested.join(".git")).expect("creating nested .git");
+
+        assert_eq!(
+            outermost_repository_in(root, nested.parent().expect("parent of nested")),
+            None,
+            "no repository on the chain to the parent directory"
+        );
+        assert_eq!(
+            outermost_repository_in(root, &nested).as_deref(),
+            Some(nested.as_path()),
+            "the requested directory itself is the outermost repository"
+        );
+
+        let intermediate = root.join("vendored");
+        std::fs::write(intermediate.join(".git"), "gitdir: elsewhere")
+            .expect("creating gitlink file");
+        assert_eq!(
+            outermost_repository_in(root, &nested).as_deref(),
+            Some(intermediate.as_path()),
+            "a gitlink file at an intermediate directory shadows deeper repositories"
+        );
+
+        std::fs::create_dir(root.join(".git")).expect("creating root .git");
+        assert_eq!(
+            outermost_repository_in(root, &nested).as_deref(),
+            Some(root),
+            "a repository at the root shadows everything below it"
+        );
+
+        assert_eq!(
+            outermost_repository_in(&nested, root),
+            None,
+            "paths outside the root are not remapped"
+        );
+    }
 }
 
 async fn load_direnv_environment(

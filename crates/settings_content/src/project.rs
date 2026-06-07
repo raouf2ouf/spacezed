@@ -74,6 +74,10 @@ pub struct ProjectSettingsContent {
     /// Configuration for how direnv configuration should be loaded
     pub load_direnv: Option<DirenvSettings>,
 
+    /// Configuration for which directories get a login-shell probe to
+    /// capture the project environment
+    pub project_environment: Option<ProjectEnvironmentSettings>,
+
     /// Settings for slash commands.
     pub slash_commands: Option<SlashCommandSettings>,
 
@@ -715,6 +719,27 @@ pub enum DirenvSettings {
     Direct,
     /// Do not load direnv configuration
     Disabled,
+}
+
+#[derive(
+    Clone, Copy, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectEnvironmentSettings {
+    /// Capture an environment for every directory that requests one,
+    /// including each git repository discovered in the project
+    #[default]
+    All,
+    /// Capture environments for worktree roots and top-level repositories;
+    /// repositories nested inside another repository (e.g. submodules)
+    /// reuse the environment of their outermost containing repository
+    TopLevel,
+    /// Capture one environment per worktree root and reuse it for every
+    /// directory inside that worktree
+    RootOnly,
+    /// Do not capture any environments (terminals, tasks, and language
+    /// servers inherit Zed's own environment)
+    Off,
 }
 
 #[derive(
