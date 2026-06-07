@@ -39,12 +39,11 @@ pub struct StatusBar {
 
 impl Render for StatusBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Spacezed: no padding or gap so spaceline segments and powerline
+        // arrows bleed to the bar's edges.
         h_flex()
             .w_full()
             .justify_between()
-            .gap(DynamicSpacing::Base08.rems(cx))
-            .py(DynamicSpacing::Base04.rems(cx))
-            .px(DynamicSpacing::Base06.rems(cx))
             .bg(cx.theme().colors().status_bar_background)
             .map(|el| match window.window_decorations() {
                 Decorations::Server => el,
@@ -68,8 +67,9 @@ impl Render for StatusBar {
 
 impl StatusBar {
     fn render_left_tools(&self) -> impl IntoElement {
+        // Spacezed: flex_1 lets the single spaceline item span the full bar.
         h_flex()
-            .gap_1()
+            .flex_1()
             .overflow_x_hidden()
             .children(self.left_items.iter().map(|item| item.to_any()))
     }

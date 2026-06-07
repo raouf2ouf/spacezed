@@ -60,6 +60,12 @@ impl ModeIndicator {
         self.vim.as_ref().and_then(|vim| vim.upgrade())
     }
 
+    /// The mode of the most recently focused vim instance, if any. `Vim` is
+    /// crate-private, so the spaceline status bar reads mode through this.
+    pub fn current_mode(&self, cx: &gpui::App) -> Option<crate::state::Mode> {
+        self.vim().map(|vim| vim.read(cx).mode)
+    }
+
     fn current_operators_description(&self, vim: Entity<Vim>, cx: &mut Context<Self>) -> String {
         let recording = Vim::globals(cx)
             .recording_register

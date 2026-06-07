@@ -37,6 +37,8 @@ use language::{
     CharKind, CharScopeContext, CursorShape, Point, Selection, SelectionGoal, TransactionId,
 };
 pub use mode_indicator::ModeIndicator;
+// Exported for the spaceline status bar, which renders vim state outside this crate.
+pub use state::Mode;
 use motion::Motion;
 use multi_buffer::ToPoint as _;
 use normal::search::SearchSubmit;
@@ -48,7 +50,7 @@ use settings::RegisterSetting;
 pub use settings::{
     ModeContent, Settings, SettingsStore, UseSystemClipboard, update_settings_file,
 };
-use state::{Mode, Operator, RecordedSelection, SearchState, VimGlobals};
+use state::{Operator, RecordedSelection, SearchState, VimGlobals};
 use std::{mem, ops::Range, sync::Arc};
 use surrounds::SurroundsType;
 use theme::ThemeSettings;
