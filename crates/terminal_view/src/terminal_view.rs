@@ -367,6 +367,13 @@ impl TerminalView {
 
     /// Commits (sends) the given text to the PTY. Called by InputHandler::replace_text_in_range.
     pub(crate) fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        // Spacezed: vi mode is a command mode -- typed text must not reach
+        // the pty. Keystrokes still propagate to the keymap (leader keys);
+        // this only closes the IME text path they would otherwise leak
+        // through.
+        if self.terminal.read(cx).vi_mode_enabled() {
+            return;
+        }
         if !text.is_empty() {
             self.terminal.update(cx, |term, _| {
                 term.input(text.to_string().into_bytes());

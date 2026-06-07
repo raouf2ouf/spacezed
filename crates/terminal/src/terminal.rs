@@ -1467,9 +1467,12 @@ impl Terminal {
         self.events.push_back(InternalEvent::ToggleViMode);
     }
 
-    pub fn vi_motion(&mut self, keystroke: &Keystroke) {
+    /// Returns whether the keystroke was actually consumed. Spacezed: keys vi
+    /// mode does not handle (e.g. the SPC leader) must propagate to the
+    /// keymap, or multi-key bindings and which-key never see them.
+    pub fn vi_motion(&mut self, keystroke: &Keystroke) -> bool {
         if !self.vi_mode_enabled {
-            return;
+            return false;
         }
 
         let key: Cow<'_, str> = if keystroke.modifiers.shift {
@@ -1505,7 +1508,7 @@ impl Terminal {
             self.events
                 .push_back(InternalEvent::UpdateSelection(cursor_pos));
             self.events.push_back(InternalEvent::ViMotion(motion));
-            return;
+            return true;
         }
 
         let scroll_motion = match key.as_ref() {
@@ -1526,7 +1529,7 @@ impl Terminal {
 
         if let Some(scroll_motion) = scroll_motion {
             self.events.push_back(InternalEvent::Scroll(scroll_motion));
-            return;
+            return true;
         }
 
         match key.as_ref() {
@@ -1537,28 +1540,34 @@ impl Terminal {
                 let selection = Selection::new(selection_type, point, side);
                 self.events
                     .push_back(InternalEvent::SetSelection(Some((selection, point))));
+                true
             }
 
             "escape" => {
                 self.events.push_back(InternalEvent::SetSelection(None));
+                true
             }
 
             "y" => {
                 self.copy(Some(false));
+                true
             }
 
             "i" => {
                 self.scroll_to_bottom();
                 self.toggle_vi_mode();
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
     pub fn try_keystroke(&mut self, keystroke: &Keystroke, option_as_meta: bool) -> bool {
         if self.vi_mode_enabled {
-            self.vi_motion(keystroke);
-            return true;
+            // Spacezed: only claim keys vi mode actually handles; unhandled
+            // keys still never reach the pty (the input path below is
+            // skipped) but must propagate so leader sequences work.
+            return self.vi_motion(keystroke);
         }
 
         // Keep default terminal behavior
